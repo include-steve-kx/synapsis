@@ -14,8 +14,11 @@ in vec2 v_uv;
 out vec4 outColor;
 uniform sampler2D u_source;
 uniform sampler2D u_history;
+uniform sampler2D u_previousSource;
+uniform sampler2D u_motion;
 uniform sampler2D u_ascii;
 uniform vec2 u_resolution;
+uniform vec2 u_motionResolution;
 uniform vec2 u_pointer;
 uniform float u_pointerActive;
 uniform float u_pointerVelocity;
@@ -30,7 +33,7 @@ float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 float hash21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 `;
 
-const SHADERS: Record<EffectNodeV2['kind'] | 'copy' | 'flipHorizontal', string> = {
+const SHADERS: Record<EffectNodeV2['kind'] | 'copy' | 'flipHorizontal' | 'datamoshMotion', string> = {
   copy: `void main(){ outColor = texture(u_source, v_uv); }`,
   flipHorizontal: `void main(){ outColor = texture(u_source, vec2(1. - v_uv.x, v_uv.y)); }`,
   edge: `void main(){
@@ -76,11 +79,39 @@ const SHADERS: Record<EffectNodeV2['kind'] | 'copy' | 'flipHorizontal', string> 
     c*=1.-u_p3*(.12+.1*sin(gl_FragCoord.y*3.14159)); outColor=vec4(c,1.);
   }`,
   pixelSort: `void main(){
-    vec4 s[12]; vec2 axis=u_p2<.5?vec2(1.,0.):vec2(0.,1.); float span=max(1.,floor(u_p1));
-    for(int i=0;i<12;i++){ float fi=float(i)-5.5; s[i]=texture(u_source,clamp(v_uv+axis*fi*span/u_resolution,0.,1.)); }
-    for(int a=0;a<12;a++){ for(int b=0;b<11;b++){ if(lum(s[b].rgb)>lum(s[b+1].rgb)){vec4 t=s[b];s[b]=s[b+1];s[b+1]=t;} } }
-    vec4 src=texture(u_source,v_uv); float gate=smoothstep(u_p0,u_p0+.08,lum(src.rgb)); vec4 sorted=s[6];
-    outColor=mix(src,sorted,gate*u_p3);
+    const int MAX_SPAN=16; vec4 colors[MAX_SPAN]; float keys[MAX_SPAN]; float eligible[MAX_SPAN];
+    int limit=int(clamp(floor(u_p1+.5),8.,16.)); int mode=int(clamp(floor(u_p2+.5),0.,3.));
+    bool vertical=(mode==1||mode==3); bool reverse=(mode>=2); float axisSize=vertical?u_resolution.y:u_resolution.x;
+    float coordinate=vertical?gl_FragCoord.y:gl_FragCoord.x; float line=vertical?floor(gl_FragCoord.x):floor(gl_FragCoord.y);
+    float randomOffset=floor(hash21(vec2(line,u_seed+17.))*float(limit));
+    float chunkStart=floor((coordinate+randomOffset)/float(limit))*float(limit)-randomOffset;
+    int position=int(clamp(floor(coordinate-chunkStart),0.,float(limit-1))); float low=min(u_p0,u_p3),high=max(u_p0,u_p3);
+    for(int i=0;i<MAX_SPAN;i++){
+      float sampleCoordinate=chunkStart+float(i)+.5; vec2 uv=v_uv;
+      if(vertical)uv.y=sampleCoordinate/u_resolution.y;else uv.x=sampleCoordinate/u_resolution.x;
+      colors[i]=texture(u_source,clamp(uv,0.,1.)); float key=lum(colors[i].rgb); keys[i]=key;
+      eligible[i]=(i<limit&&sampleCoordinate>=0.&&sampleCoordinate<axisSize&&key>=low&&key<=high)?1.:0.;
+    }
+    if(eligible[position]<.5){outColor=texture(u_source,v_uv);return;}
+    int runStart=0,runEnd=limit;
+    for(int i=0;i<MAX_SPAN;i++){
+      if(i<position&&eligible[i]<.5)runStart=i+1;
+      if(i>position&&i<runEnd&&eligible[i]<.5)runEnd=i;
+    }
+    for(int i=0;i<MAX_SPAN;i++)if(i<runStart||i>=runEnd)keys[i]=2.+float(i)/float(MAX_SPAN);
+    for(int k=2;k<=MAX_SPAN;k*=2){
+      for(int j=k/2;j>0;j/=2){
+        for(int i=0;i<MAX_SPAN;i++){
+          int partner=i^j;
+          if(partner>i){
+            bool ascending=(i&k)==0; bool swapValues=ascending?(keys[i]>keys[partner]):(keys[i]<keys[partner]);
+            if(swapValues){float key=keys[i];keys[i]=keys[partner];keys[partner]=key;vec4 color=colors[i];colors[i]=colors[partner];colors[partner]=color;}
+          }
+        }
+      }
+    }
+    int rank=position-runStart; int runLength=runEnd-runStart; if(reverse)rank=runLength-1-rank;
+    outColor=colors[clamp(rank,0,MAX_SPAN-1)];
   }`,
   echo: `void main(){
     vec2 drift=vec2(u_p1,u_p2)/u_resolution; vec4 src=texture(u_source,v_uv); vec4 old=texture(u_history,clamp(v_uv-drift,0.,1.));
@@ -165,10 +196,30 @@ const SHADERS: Record<EffectNodeV2['kind'] | 'copy' | 'flipHorizontal', string> 
     float a=hash21(cell+tick),b=hash21(cell+tick+19.2),c=hash21(cell+tick+71.9); vec3 grain=mix(vec3(a),vec3(a,b,c),u_p2)-.5;
     outColor=vec4(clamp(src+grain*u_p0,0.,1.),1.);
   }`,
+  datamoshMotion: `void main(){
+    float block=max(4.,u_p1),search=max(0.,u_p2); vec2 id=floor(gl_FragCoord.xy); vec2 anchor=(id+.5)*block/u_resolution;
+    vec2 tap=block*.22/u_resolution; vec3 currentCenter=texture(u_source,clamp(anchor,0.,1.)).rgb;
+    float bestError=1e6; vec2 bestOffset=vec2(0.);
+    for(int x=-1;x<=1;x++){for(int y=-1;y<=1;y++){
+      vec2 candidate=vec2(float(x),float(y))*search/u_resolution; float error=0.;
+      error+=length(currentCenter-texture(u_previousSource,clamp(anchor+candidate,0.,1.)).rgb);
+      error+=length(texture(u_source,clamp(anchor+tap,0.,1.)).rgb-texture(u_previousSource,clamp(anchor+tap+candidate,0.,1.)).rgb);
+      error+=length(texture(u_source,clamp(anchor-tap,0.,1.)).rgb-texture(u_previousSource,clamp(anchor-tap+candidate,0.,1.)).rgb);
+      if(error<bestError){bestError=error;bestOffset=candidate;}
+    }}
+    float sourceChange=length(currentCenter-texture(u_previousSource,clamp(anchor,0.,1.)).rgb);
+    float confidence=1.-smoothstep(.18,1.35,bestError); vec2 encoded=bestOffset*u_resolution/max(1.,search)*.5+.5;
+    outColor=vec4(encoded,confidence,clamp(sourceChange,0.,1.));
+  }`,
   datamosh: `void main(){
-    float block=max(4.,u_p1); vec2 id=floor(gl_FragCoord.xy/block); float tick=floor(u_time*7.); float gate=step(1.-u_p0,hash21(id+tick));
-    vec2 drift=vec2(u_p2,sign(hash21(id)-.5)*abs(u_p2)*.35)/u_resolution; vec3 now=texture(u_source,v_uv).rgb, old=texture(u_history,clamp(v_uv-drift,0.,1.)).rgb;
-    float persistence=gate*u_p3; outColor=vec4(mix(now,old,persistence),1.);
+    float block=max(4.,u_p1),search=max(0.,u_p2); vec2 id=floor(gl_FragCoord.xy/block); vec2 motionUv=(id+.5)/u_motionResolution;
+    vec4 motionData=texture(u_motion,clamp(motionUv,0.,1.)); vec2 bestOffset=(motionData.rg*2.-1.)*search/u_resolution;
+    vec3 now=texture(u_source,v_uv).rgb; vec3 recycled=texture(u_history,clamp(v_uv+bestOffset,0.,1.)).rgb;
+    float motionAmount=length(bestOffset*u_resolution)/max(1.,search*1.4142); float confidence=motionData.b,sourceChange=motionData.a;
+    float tick=floor(u_time*2.5); float dropped=step(1.-u_p0,hash21(id+tick+u_seed));
+    float activity=max(smoothstep(.015,.3,sourceChange),motionAmount*confidence); float hold=dropped*u_p3*mix(.3,1.,activity);
+    float chromaError=(1.-confidence)*u_p0*.18; recycled=mix(recycled,recycled.gbr,chromaError);
+    outColor=vec4(mix(now,recycled,hold),1.);
   }`,
   lowpoly: `void main(){
     float size=max(4.,u_p0); vec2 p=gl_FragCoord.xy/size; vec2 id=floor(p); vec2 f=fract(p); bool upper=f.x+f.y>1.;
@@ -281,7 +332,18 @@ const SHADERS: Record<EffectNodeV2['kind'] | 'copy' | 'flipHorizontal', string> 
 };
 
 type SourceElement = HTMLVideoElement | HTMLImageElement | HTMLCanvasElement;
-type HistoryBuffer = { texture: WebGLTexture; framebuffer: WebGLFramebuffer; ready: boolean };
+type HistoryBuffer = {
+  texture: WebGLTexture;
+  framebuffer: WebGLFramebuffer;
+  sourceTexture: WebGLTexture;
+  sourceFramebuffer: WebGLFramebuffer;
+  motionTexture: WebGLTexture;
+  motionFramebuffer: WebGLFramebuffer;
+  motionWidth: number;
+  motionHeight: number;
+  ready: boolean;
+  sourceReady: boolean;
+};
 const TEMPORAL_KINDS = new Set<EffectNodeV2['kind']>(['echo', 'slitScan', 'datamosh', 'difference', 'culture', 'life', 'grain', 'trails']);
 
 export class WebGLRenderer {
@@ -326,7 +388,7 @@ export class WebGLRenderer {
 
   setQualityScale(scale: number): void { this.qualityScale = Math.max(.5, Math.min(1, scale)); }
 
-  resetHistory(): void { this.histories.forEach((history) => { history.ready = false; }); }
+  resetHistory(): void { this.histories.forEach((history) => { history.ready = false; history.sourceReady = false; }); }
 
   render(source: SourceElement, effects: readonly EffectNodeV2[], pointer: PointerState, time: number, mirrorSource = false): void {
     if (this.contextLost) return;
@@ -353,12 +415,16 @@ export class WebGLRenderer {
       if (effect.kind === 'ascii' && effect.parameters.charset) this.updateAscii(effect.parameters.charset);
       const targetIndex = passIndex % 2;
       const history = TEMPORAL_KINDS.has(effect.kind) ? this.historyFor(effect.id) : undefined;
+      const effectInput = input;
+      if (effect.kind === 'datamosh' && history) this.prepareDatamoshMotion(effectInput, effect, pointer, time, history);
       this.draw(effect.kind, input, this.framebuffers[targetIndex], effect, pointer, time, history);
       input = this.pingTextures[targetIndex];
       passIndex += 1;
       if (history) {
         this.draw('copy', input, history.framebuffer, null, pointer, time);
+        this.draw('copy', effectInput, history.sourceFramebuffer, null, pointer, time);
         history.ready = true;
+        history.sourceReady = true;
       }
     });
     this.draw('copy', input, null, null, pointer, time);
@@ -382,7 +448,11 @@ export class WebGLRenderer {
     }
     this.histories.forEach((history) => {
       this.allocateTexture(history.texture, width, height);
+      this.allocateTexture(history.sourceTexture, width, height);
       history.ready = false;
+      history.sourceReady = false;
+      history.motionWidth = 0;
+      history.motionHeight = 0;
     });
   }
 
@@ -413,7 +483,21 @@ export class WebGLRenderer {
     if (!framebuffer) throw new Error('Could not create a node history framebuffer.');
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, framebuffer);
     this.gl.framebufferTexture2D(this.gl.FRAMEBUFFER, this.gl.COLOR_ATTACHMENT0, this.gl.TEXTURE_2D, texture, 0);
-    const history = { texture, framebuffer, ready: false };
+    const sourceTexture = this.createTexture();
+    this.allocateTexture(sourceTexture);
+    const sourceFramebuffer = this.gl.createFramebuffer();
+    if (!sourceFramebuffer) throw new Error('Could not create a node source-history framebuffer.');
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, sourceFramebuffer);
+    this.gl.framebufferTexture2D(this.gl.FRAMEBUFFER, this.gl.COLOR_ATTACHMENT0, this.gl.TEXTURE_2D, sourceTexture, 0);
+    const motionTexture = this.createTexture();
+    this.gl.bindTexture(this.gl.TEXTURE_2D, motionTexture);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
+    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
+    const motionFramebuffer = this.gl.createFramebuffer();
+    if (!motionFramebuffer) throw new Error('Could not create a datamosh motion framebuffer.');
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, motionFramebuffer);
+    this.gl.framebufferTexture2D(this.gl.FRAMEBUFFER, this.gl.COLOR_ATTACHMENT0, this.gl.TEXTURE_2D, motionTexture, 0);
+    const history = { texture, framebuffer, sourceTexture, sourceFramebuffer, motionTexture, motionFramebuffer, motionWidth: 0, motionHeight: 0, ready: false, sourceReady: false };
     this.histories.set(id, history);
     return history;
   }
@@ -423,8 +507,24 @@ export class WebGLRenderer {
       if (activeIds.has(id)) return;
       this.gl.deleteFramebuffer(history.framebuffer);
       this.gl.deleteTexture(history.texture);
+      this.gl.deleteFramebuffer(history.sourceFramebuffer);
+      this.gl.deleteTexture(history.sourceTexture);
+      this.gl.deleteFramebuffer(history.motionFramebuffer);
+      this.gl.deleteTexture(history.motionTexture);
       this.histories.delete(id);
     });
+  }
+
+  private prepareDatamoshMotion(source: WebGLTexture, effect: EffectNodeV2, pointer: PointerState, time: number, history: HistoryBuffer): void {
+    const block = Math.max(4, effect.parameters.p1);
+    const width = Math.max(1, Math.ceil(this.width / block));
+    const height = Math.max(1, Math.ceil(this.height / block));
+    if (width !== history.motionWidth || height !== history.motionHeight) {
+      this.allocateTexture(history.motionTexture, width, height);
+      history.motionWidth = width;
+      history.motionHeight = height;
+    }
+    this.draw('datamoshMotion', source, history.motionFramebuffer, effect, pointer, time, history, width, height);
   }
 
   private program(kind: keyof typeof SHADERS): WebGLProgram {
@@ -449,11 +549,11 @@ export class WebGLRenderer {
     return program;
   }
 
-  private draw(kind: keyof typeof SHADERS, source: WebGLTexture, framebuffer: WebGLFramebuffer | null, effect: EffectNodeV2 | null, pointer: PointerState, time: number, history?: HistoryBuffer): void {
+  private draw(kind: keyof typeof SHADERS, source: WebGLTexture, framebuffer: WebGLFramebuffer | null, effect: EffectNodeV2 | null, pointer: PointerState, time: number, history?: HistoryBuffer, viewportWidth = this.width, viewportHeight = this.height): void {
     const gl = this.gl;
     const program = this.program(kind);
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-    gl.viewport(0, 0, this.width, this.height);
+    gl.viewport(0, 0, viewportWidth, viewportHeight);
     gl.useProgram(program);
     const position = gl.getAttribLocation(program, 'a_position');
     gl.enableVertexAttribArray(position);
@@ -465,7 +565,10 @@ export class WebGLRenderer {
     bind(0, source, 'u_source');
     bind(1, history?.ready ? history.texture : source, 'u_history');
     bind(2, this.asciiTexture, 'u_ascii');
+    bind(3, history?.sourceReady ? history.sourceTexture : source, 'u_previousSource');
+    bind(4, history?.motionTexture ?? source, 'u_motion');
     gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), this.width, this.height);
+    gl.uniform2f(gl.getUniformLocation(program, 'u_motionResolution'), history?.motionWidth || 1, history?.motionHeight || 1);
     gl.uniform2f(gl.getUniformLocation(program, 'u_pointer'), pointer.x, pointer.y);
     gl.uniform1f(gl.getUniformLocation(program, 'u_pointerActive'), pointer.active);
     gl.uniform1f(gl.getUniformLocation(program, 'u_pointerVelocity'), pointer.velocity);
@@ -477,7 +580,11 @@ export class WebGLRenderer {
   }
 
   destroy(): void {
-    this.histories.forEach((history) => { this.gl.deleteFramebuffer(history.framebuffer); this.gl.deleteTexture(history.texture); });
+    this.histories.forEach((history) => {
+      this.gl.deleteFramebuffer(history.framebuffer); this.gl.deleteTexture(history.texture);
+      this.gl.deleteFramebuffer(history.sourceFramebuffer); this.gl.deleteTexture(history.sourceTexture);
+      this.gl.deleteFramebuffer(history.motionFramebuffer); this.gl.deleteTexture(history.motionTexture);
+    });
     this.histories.clear();
     this.framebuffers.forEach((framebuffer) => this.gl.deleteFramebuffer(framebuffer));
     [...this.pingTextures, this.sourceTexture, this.asciiTexture].forEach((texture) => this.gl.deleteTexture(texture));

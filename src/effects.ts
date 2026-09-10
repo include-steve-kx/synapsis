@@ -49,11 +49,11 @@ export const EFFECTS: readonly EffectDefinition[] = [
     { key: 'p2', name: 'Block size', min: 4, max: 80, step: 1, initial: 28, format: int },
     { key: 'p3', name: 'Scanlines', min: 0, max: 1, step: .01, initial: .2, format: pct },
   ]},
-  { kind: 'pixelSort', category: 'pixel-structure', name: 'Pixel Sort', description: 'Locally sorts thresholded luminance runs along an axis.', params: [
-    { key: 'p0', name: 'Threshold', min: 0, max: 1, step: .01, initial: .42, format: pct },
-    { key: 'p1', name: 'Span', min: 1, max: 12, step: 1, initial: 8, format: int },
-    { key: 'p2', name: 'Axis', min: 0, max: 1, step: 1, initial: 0, format: (v) => v < .5 ? 'X' : 'Y' },
-    { key: 'p3', name: 'Mix', min: 0, max: 1, step: .01, initial: .85, format: pct },
+  { kind: 'pixelSort', category: 'pixel-structure', name: 'Pixel Sort', description: 'Sorts contiguous tonal spans into directional streaks.', cost: 3, params: [
+    { key: 'p0', name: 'Low threshold', min: 0, max: 1, step: .01, initial: .25, format: pct },
+    { key: 'p1', name: 'Span limit', min: 8, max: 16, step: 1, initial: 16, format: int },
+    { key: 'p2', name: 'Direction', min: 0, max: 3, step: 1, initial: 0, format: (v) => ['X →', 'Y ↑', 'X ←', 'Y ↓'][Math.round(v)] ?? 'X →' },
+    { key: 'p3', name: 'High threshold', min: 0, max: 1, step: .01, initial: .8, format: pct },
   ]},
   { kind: 'echo', category: 'time-signal', name: 'Echo', description: 'Feedback trails from the prior processed frame.', usesHistory: true, params: [
     { key: 'p0', name: 'Decay', min: 0, max: .98, step: .01, initial: .78, format: pct },
@@ -157,11 +157,11 @@ export const EFFECTS: readonly EffectDefinition[] = [
     { key: 'p2', name: 'Color', min: 0, max: 1, step: .01, initial: .12, format: pct },
     { key: 'p3', name: 'Speed', min: 0, max: 30, step: .5, initial: 12 },
   ]},
-  { kind: 'datamosh', category: 'time-signal', name: 'Datamosh', description: 'Temporal macroblocks borrow and drag the previous frame.', usesHistory: true, params: [
-    { key: 'p0', name: 'Damage', min: 0, max: 1, step: .01, initial: .5, format: pct },
+  { kind: 'datamosh', category: 'time-signal', name: 'Datamosh', description: 'Motion vectors drag recycled macroblocks through time.', usesHistory: true, animated: true, cost: 3, params: [
+    { key: 'p0', name: 'Frame loss', min: 0, max: 1, step: .01, initial: .58, format: pct },
     { key: 'p1', name: 'Block size', min: 4, max: 100, step: 1, initial: 34, format: int },
-    { key: 'p2', name: 'Motion', min: -40, max: 40, step: .5, initial: 7 },
-    { key: 'p3', name: 'Decay', min: 0, max: .99, step: .01, initial: .86, format: pct },
+    { key: 'p2', name: 'Motion search', min: 0, max: 32, step: .5, initial: 12 },
+    { key: 'p3', name: 'Persistence', min: 0, max: .995, step: .005, initial: .92, format: pct },
   ]},
   { kind: 'lowpoly', category: 'pixel-structure', name: 'Low Poly', description: 'Triangular camera sampling with faceted shading.', params: [
     { key: 'p0', name: 'Cell size', min: 8, max: 120, step: 1, initial: 36, format: int },
