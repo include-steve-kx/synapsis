@@ -49,9 +49,9 @@ export const EFFECTS: readonly EffectDefinition[] = [
     { key: 'p2', name: 'Block size', min: 4, max: 80, step: 1, initial: 28, format: int },
     { key: 'p3', name: 'Scanlines', min: 0, max: 1, step: .01, initial: .2, format: pct },
   ]},
-  { kind: 'pixelSort', category: 'pixel-structure', name: 'Pixel Sort', description: 'Sorts contiguous tonal spans into directional streaks.', cost: 3, params: [
+  { kind: 'pixelSort', category: 'pixel-structure', name: 'Pixel Sort', description: 'Expands tonal sorting smoothly from local pixels to a complete scanline.', cost: 3, params: [
     { key: 'p0', name: 'Low threshold', min: 0, max: 1, step: .01, initial: .25, format: pct },
-    { key: 'p1', name: 'Span limit', min: 8, max: 17, step: 1, initial: 16, format: (v) => v >= 16.5 ? 'FULL' : int(v) },
+    { key: 'p1', name: 'Reach', min: 0, max: 1, step: .01, initial: .35, format: pct },
     { key: 'p2', name: 'Direction', min: 0, max: 3, step: 1, initial: 0, format: (v) => ['X →', 'Y ↑', 'X ←', 'Y ↓'][Math.round(v)] ?? 'X →' },
     { key: 'p3', name: 'High threshold', min: 0, max: 1, step: .01, initial: .8, format: pct },
   ]},
