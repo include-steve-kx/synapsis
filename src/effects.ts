@@ -51,7 +51,7 @@ export const EFFECTS: readonly EffectDefinition[] = [
   ]},
   { kind: 'pixelSort', category: 'pixel-structure', name: 'Pixel Sort', description: 'Sorts contiguous tonal spans into directional streaks.', cost: 3, params: [
     { key: 'p0', name: 'Low threshold', min: 0, max: 1, step: .01, initial: .25, format: pct },
-    { key: 'p1', name: 'Span limit', min: 8, max: 16, step: 1, initial: 16, format: int },
+    { key: 'p1', name: 'Span limit', min: 8, max: 17, step: 1, initial: 16, format: (v) => v >= 16.5 ? 'FULL' : int(v) },
     { key: 'p2', name: 'Direction', min: 0, max: 3, step: 1, initial: 0, format: (v) => ['X →', 'Y ↑', 'X ←', 'Y ↓'][Math.round(v)] ?? 'X →' },
     { key: 'p3', name: 'High threshold', min: 0, max: 1, step: .01, initial: .8, format: pct },
   ]},
@@ -160,7 +160,7 @@ export const EFFECTS: readonly EffectDefinition[] = [
   { kind: 'datamosh', category: 'time-signal', name: 'Datamosh', description: 'Motion vectors drag recycled macroblocks through time.', usesHistory: true, animated: true, cost: 3, params: [
     { key: 'p0', name: 'Frame loss', min: 0, max: 1, step: .01, initial: .58, format: pct },
     { key: 'p1', name: 'Block size', min: 4, max: 100, step: 1, initial: 34, format: int },
-    { key: 'p2', name: 'Motion search', min: 0, max: 32, step: .5, initial: 12 },
+    { key: 'p2', name: 'Motion gain', min: 0, max: 4, step: .05, initial: 1.5 },
     { key: 'p3', name: 'Persistence', min: 0, max: .995, step: .005, initial: .92, format: pct },
   ]},
   { kind: 'lowpoly', category: 'pixel-structure', name: 'Low Poly', description: 'Triangular camera sampling with faceted shading.', params: [

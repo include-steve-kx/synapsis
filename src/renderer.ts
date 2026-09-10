@@ -80,12 +80,36 @@ const SHADERS: Record<EffectNodeV2['kind'] | 'copy' | 'flipHorizontal' | 'datamo
   }`,
   pixelSort: `void main(){
     const int MAX_SPAN=16; vec4 colors[MAX_SPAN]; float keys[MAX_SPAN]; float eligible[MAX_SPAN];
-    int limit=int(clamp(floor(u_p1+.5),8.,16.)); int mode=int(clamp(floor(u_p2+.5),0.,3.));
+    int mode=int(clamp(floor(u_p2+.5),0.,3.));
     bool vertical=(mode==1||mode==3); bool reverse=(mode>=2); float axisSize=vertical?u_resolution.y:u_resolution.x;
     float coordinate=vertical?gl_FragCoord.y:gl_FragCoord.x; float line=vertical?floor(gl_FragCoord.x):floor(gl_FragCoord.y);
+    float low=min(u_p0,u_p3),high=max(u_p0,u_p3); float currentKey=lum(texture(u_source,v_uv).rgb);
+    if(u_p1>16.5){
+      const int FULL_SAMPLES=24; vec4 fullColors[FULL_SAMPLES]; float fullKeys[FULL_SAMPLES]; float fullMask[FULL_SAMPLES];
+      if(currentKey<low||currentKey>high){outColor=texture(u_source,v_uv);return;}
+      float eligibleCount=0.,beforeCount=0.; float jitter=hash21(vec2(line,u_seed+91.));
+      for(int i=0;i<FULL_SAMPLES;i++){
+        float position=(float(i)+jitter)/float(FULL_SAMPLES); vec2 uv=v_uv;if(vertical)uv.y=position;else uv.x=position;
+        fullColors[i]=texture(u_source,uv);fullKeys[i]=lum(fullColors[i].rgb);fullMask[i]=(fullKeys[i]>=low&&fullKeys[i]<=high)?1.:0.;
+        eligibleCount+=fullMask[i];beforeCount+=fullMask[i]*step(position,coordinate/axisSize);
+      }
+      float targetRank=clamp((beforeCount-.5)/max(1.,eligibleCount),0.,1.);if(reverse)targetRank=1.-targetRank;
+      float searchLow=low,searchHigh=high;
+      for(int iteration=0;iteration<6;iteration++){
+        float midpoint=(searchLow+searchHigh)*.5,count=0.;
+        for(int i=0;i<FULL_SAMPLES;i++)count+=fullMask[i]*step(fullKeys[i],midpoint);
+        if(count/max(1.,eligibleCount)<targetRank)searchLow=midpoint;else searchHigh=midpoint;
+      }
+      float targetKey=(searchLow+searchHigh)*.5,bestDistance=2.;vec4 bestColor=texture(u_source,v_uv);
+      for(int i=0;i<FULL_SAMPLES;i++){
+        float sampleDistance=fullMask[i]>.5?abs(fullKeys[i]-targetKey):2.;if(sampleDistance<bestDistance){bestDistance=sampleDistance;bestColor=fullColors[i];}
+      }
+      outColor=bestColor;return;
+    }
+    int limit=int(clamp(floor(u_p1+.5),8.,16.));
     float randomOffset=floor(hash21(vec2(line,u_seed+17.))*float(limit));
     float chunkStart=floor((coordinate+randomOffset)/float(limit))*float(limit)-randomOffset;
-    int position=int(clamp(floor(coordinate-chunkStart),0.,float(limit-1))); float low=min(u_p0,u_p3),high=max(u_p0,u_p3);
+    int position=int(clamp(floor(coordinate-chunkStart),0.,float(limit-1)));
     for(int i=0;i<MAX_SPAN;i++){
       float sampleCoordinate=chunkStart+float(i)+.5; vec2 uv=v_uv;
       if(vertical)uv.y=sampleCoordinate/u_resolution.y;else uv.x=sampleCoordinate/u_resolution.x;
@@ -197,7 +221,7 @@ const SHADERS: Record<EffectNodeV2['kind'] | 'copy' | 'flipHorizontal' | 'datamo
     outColor=vec4(clamp(src+grain*u_p0,0.,1.),1.);
   }`,
   datamoshMotion: `void main(){
-    float block=max(4.,u_p1),search=max(0.,u_p2); vec2 id=floor(gl_FragCoord.xy); vec2 anchor=(id+.5)*block/u_resolution;
+    float block=max(4.,u_p1),search=clamp(block*.5,6.,32.); vec2 id=floor(gl_FragCoord.xy); vec2 anchor=(id+.5)*block/u_resolution;
     vec2 tap=block*.22/u_resolution; vec3 currentCenter=texture(u_source,clamp(anchor,0.,1.)).rgb;
     float bestError=1e6; vec2 bestOffset=vec2(0.);
     for(int x=-1;x<=1;x++){for(int y=-1;y<=1;y++){
@@ -212,13 +236,13 @@ const SHADERS: Record<EffectNodeV2['kind'] | 'copy' | 'flipHorizontal' | 'datamo
     outColor=vec4(encoded,confidence,clamp(sourceChange,0.,1.));
   }`,
   datamosh: `void main(){
-    float block=max(4.,u_p1),search=max(0.,u_p2); vec2 id=floor(gl_FragCoord.xy/block); vec2 motionUv=(id+.5)/u_motionResolution;
-    vec4 motionData=texture(u_motion,clamp(motionUv,0.,1.)); vec2 bestOffset=(motionData.rg*2.-1.)*search/u_resolution;
+    float block=max(4.,u_p1),search=clamp(block*.5,6.,32.); vec2 id=floor(gl_FragCoord.xy/block); vec2 motionUv=(id+.5)/u_motionResolution;
+    vec4 motionData=texture(u_motion,clamp(motionUv,0.,1.)); vec2 bestOffset=(motionData.rg*2.-1.)*search*u_p2/u_resolution;
     vec3 now=texture(u_source,v_uv).rgb; vec3 recycled=texture(u_history,clamp(v_uv+bestOffset,0.,1.)).rgb;
-    float motionAmount=length(bestOffset*u_resolution)/max(1.,search*1.4142); float confidence=motionData.b,sourceChange=motionData.a;
+    float motionAmount=length(bestOffset*u_resolution)/max(1.,search*1.4142); float confidence=motionData.b;
     float tick=floor(u_time*2.5); float dropped=step(1.-u_p0,hash21(id+tick+u_seed));
-    float activity=max(smoothstep(.015,.3,sourceChange),motionAmount*confidence); float hold=dropped*u_p3*mix(.3,1.,activity);
-    float chromaError=(1.-confidence)*u_p0*.18; recycled=mix(recycled,recycled.gbr,chromaError);
+    float hold=dropped*u_p3; float chromaError=u_p0*(.04+(1.-confidence)*.28);
+    recycled=mix(recycled,recycled.gbr,chromaError);recycled+=vec3(.025,-.012,.018)*u_p0*motionAmount;
     outColor=vec4(mix(now,recycled,hold),1.);
   }`,
   lowpoly: `void main(){

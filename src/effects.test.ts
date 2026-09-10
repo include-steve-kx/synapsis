@@ -59,11 +59,12 @@ describe('Synapsis v2 effect catalogue', () => {
   it('exposes bounded pixel-sort spans and motion-driven datamosh controls', () => {
     const pixelSort = effectDefinition('pixelSort');
     expect(pixelSort.params.map((parameter) => parameter.name)).toEqual(['Low threshold', 'Span limit', 'Direction', 'High threshold']);
-    expect(pixelSort.params[1].max).toBe(16);
+    expect(pixelSort.params[1].max).toBe(17);
+    expect(pixelSort.params[1].format?.(17)).toBe('FULL');
     expect(pixelSort.cost).toBe(3);
 
     const datamosh = effectDefinition('datamosh');
-    expect(datamosh.params.map((parameter) => parameter.name)).toEqual(['Frame loss', 'Block size', 'Motion search', 'Persistence']);
+    expect(datamosh.params.map((parameter) => parameter.name)).toEqual(['Frame loss', 'Block size', 'Motion gain', 'Persistence']);
     expect(datamosh.usesHistory).toBe(true);
     expect(datamosh.cost).toBe(3);
   });
