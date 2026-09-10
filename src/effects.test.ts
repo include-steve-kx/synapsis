@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createEffect, createProject, EFFECT_CATEGORIES, EFFECTS, effectDefinition, isProject, normalizeProject, randomizeEffect, randomEffectStack } from './effects';
 import { BUILTIN_RECIPES, instantiateRecipe } from './gallery';
+import { isFrontFacingCamera } from './camera';
 
 describe('Synapsis v2 effect catalogue', () => {
   it('has unique kinds and four controls per node', () => {
@@ -65,5 +66,26 @@ describe('Synapsis v2 effect catalogue', () => {
       expect(first.every((node, index) => node.id !== second[index].id)).toBe(true);
       expect(first.every((node) => !Object.values(node).some(Array.isArray))).toBe(true);
     }
+  });
+});
+
+describe('camera orientation', () => {
+  it('mirrors explicit front-facing cameras on mobile', () => {
+    expect(isFrontFacingCamera({ facingMode: 'user' }, 'Back Camera', 2)).toBe(true);
+  });
+
+  it('does not mirror explicit rear-facing cameras', () => {
+    expect(isFrontFacingCamera({ facingMode: 'environment' }, 'Front Camera', 2)).toBe(false);
+  });
+
+  it('recognizes common desktop and phone camera labels', () => {
+    expect(isFrontFacingCamera({}, 'FaceTime HD Camera', 2)).toBe(true);
+    expect(isFrontFacingCamera({}, 'External Webcam', 2)).toBe(true);
+    expect(isFrontFacingCamera({}, 'iPhone Back Camera', 2)).toBe(false);
+  });
+
+  it('treats a single unknown camera as a user-facing webcam', () => {
+    expect(isFrontFacingCamera({}, '', 1)).toBe(true);
+    expect(isFrontFacingCamera({}, '', 2)).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import './styles.css';
+import { isFrontFacingCamera } from './camera';
 import { createEffect, createProject, EFFECT_CATEGORIES, EFFECTS, effectDefinition, isProject, normalizeProject, randomizeEffect, randomEffectStack } from './effects';
 import { BUILTIN_RECIPES, instantiateRecipe } from './gallery';
 import { WebGLRenderer } from './renderer';
@@ -25,6 +26,7 @@ class SynapsisApp extends HTMLElement {
   private renderer?: WebGLRenderer;
   private source?: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement;
   private stream?: MediaStream;
+  private mirrorSource = false;
   private frameRequest = 0;
   private startTime = performance.now();
   private pointer: PointerState = { x: .5, y: .5, active: 0, velocity: 0 };
@@ -247,7 +249,7 @@ class SynapsisApp extends HTMLElement {
   private frame = (now: number): void => {
     this.drawDemo(now);
     if (this.source && this.renderer && this.isSourceReady(this.source)) {
-      try { this.renderer.render(this.source, this.project.nodes, this.pointer, (now - this.startTime) / 1000); }
+      try { this.renderer.render(this.source, this.project.nodes, this.pointer, (now - this.startTime) / 1000, this.mirrorSource); }
       catch (error) { this.showMessage(error instanceof Error ? error.message : 'Render error.', true); }
     }
     const delta = now - this.lastFrameTime;
@@ -307,6 +309,8 @@ class SynapsisApp extends HTMLElement {
     if (!navigator.mediaDevices?.getUserMedia) { this.showMessage('Camera access is unavailable in this context.', true); return; }
     this.showMessage('Requesting camera…');
     this.stopStream();
+    this.mirrorSource = false;
+    this.q('#outputCanvas').removeAttribute('data-mirrored');
     try {
       const constraints: MediaStreamConstraints = { audio: false, video: deviceId ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } } : { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } };
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -314,9 +318,13 @@ class SynapsisApp extends HTMLElement {
       video.srcObject = this.stream; video.hidden = true; video.muted = true; await video.play();
       this.source = video;
       this.cameraDevices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'videoinput');
-      const activeId = this.stream.getVideoTracks()[0]?.getSettings().deviceId;
+      const track = this.stream.getVideoTracks()[0];
+      const activeId = track?.getSettings().deviceId;
       this.currentDevice = Math.max(0, this.cameraDevices.findIndex((device) => device.deviceId === activeId));
-      this.q('#sourceLabel').textContent = this.stream.getVideoTracks()[0]?.label?.toUpperCase() || 'LIVE CAMERA';
+      const activeDevice = this.cameraDevices[this.currentDevice];
+      this.mirrorSource = Boolean(track && isFrontFacingCamera(track.getSettings(), track.label || activeDevice?.label, this.cameraDevices.length));
+      this.q('#outputCanvas').toggleAttribute('data-mirrored', this.mirrorSource);
+      this.q('#sourceLabel').textContent = track?.label?.toUpperCase() || 'LIVE CAMERA';
       this.q('#startOverlay').classList.add('hidden');
       this.renderer?.resetHistory();
       this.showMessage('Camera live. Processing stays on device.');
@@ -336,6 +344,8 @@ class SynapsisApp extends HTMLElement {
   private async importMedia(file?: File): Promise<void> {
     if (!file) return;
     this.stopStream();
+    this.mirrorSource = false;
+    this.q('#outputCanvas').removeAttribute('data-mirrored');
     const url = URL.createObjectURL(file);
     if (file.type.startsWith('video/')) {
       const video = this.q<HTMLVideoElement>('#sourceVideo');

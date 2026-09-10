@@ -30,8 +30,9 @@ float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 float hash21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 `;
 
-const SHADERS: Record<EffectNodeV2['kind'] | 'copy', string> = {
+const SHADERS: Record<EffectNodeV2['kind'] | 'copy' | 'flipHorizontal', string> = {
   copy: `void main(){ outColor = texture(u_source, v_uv); }`,
+  flipHorizontal: `void main(){ outColor = texture(u_source, vec2(1. - v_uv.x, v_uv.y)); }`,
   edge: `void main(){
     vec2 px = vec2(max(.5,u_p2)) / u_resolution;
     float tl=lum(texture(u_source,v_uv+px*vec2(-1.,1.)).rgb), tc=lum(texture(u_source,v_uv+px*vec2(0.,1.)).rgb), tr=lum(texture(u_source,v_uv+px).rgb);
@@ -327,7 +328,7 @@ export class WebGLRenderer {
 
   resetHistory(): void { this.histories.forEach((history) => { history.ready = false; }); }
 
-  render(source: SourceElement, effects: readonly EffectNodeV2[], pointer: PointerState, time: number): void {
+  render(source: SourceElement, effects: readonly EffectNodeV2[], pointer: PointerState, time: number, mirrorSource = false): void {
     if (this.contextLost) return;
     this.resize();
     const gl = this.gl;
@@ -342,12 +343,19 @@ export class WebGLRenderer {
     const active = effects.filter((effect) => effect.enabled);
     this.pruneHistories(new Set(effects.map((effect) => effect.id)));
     let input = this.sourceTexture;
-    active.forEach((effect, index) => {
+    let passIndex = 0;
+    if (mirrorSource) {
+      this.draw('flipHorizontal', input, this.framebuffers[0], null, pointer, time);
+      input = this.pingTextures[0];
+      passIndex = 1;
+    }
+    active.forEach((effect) => {
       if (effect.kind === 'ascii' && effect.parameters.charset) this.updateAscii(effect.parameters.charset);
-      const targetIndex = index % 2;
+      const targetIndex = passIndex % 2;
       const history = TEMPORAL_KINDS.has(effect.kind) ? this.historyFor(effect.id) : undefined;
       this.draw(effect.kind, input, this.framebuffers[targetIndex], effect, pointer, time, history);
       input = this.pingTextures[targetIndex];
+      passIndex += 1;
       if (history) {
         this.draw('copy', input, history.framebuffer, null, pointer, time);
         history.ready = true;
